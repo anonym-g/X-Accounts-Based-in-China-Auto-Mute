@@ -9,6 +9,7 @@
 // @connect      basedinchina.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
+// @license      MIT
 // @run-at       document-idle
 // ==/UserScript==
 
