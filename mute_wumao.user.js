@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.0.1
 // @description  爬取 + 过滤已屏蔽 + 串行执行 (显示错误码)
 // @author       OpenSource
 // @match        https://x.com/*
@@ -17,7 +17,7 @@
     'use strict';
 
     // --- 配置参数 ---
-    const BASE_URL = "https://basedinchina.com";
+    const BASE_URL = "https://basedinchina.com/home";
     
     // 爬虫并发数
     const CRAWL_CONCURRENCY = 20; 
@@ -39,10 +39,13 @@
             width: "350px", fontSize: "12px", border: "1px solid #444", fontFamily: "monospace",
             boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
         });
+
+        // 动态获取脚本头部的版本号
+        const version = GM_info.script.version;
         
         panel.innerHTML = `
             <div style="border-bottom:1px solid #444;margin-bottom:8px;padding-bottom:5px;display:flex;justify-content:space-between;align-items:center">
-                <span style="font-weight:bold;color:#e0245e;">GlassWall v1.0</span>
+                <span style="font-weight:bold;color:#e0245e;">GlassWall v${version}</span>
                 <span id="gw-pct-txt" style="color:#aaa">Ready</span>
             </div>
             <div id="gw-logs" style="height:160px;overflow-y:auto;color:#ccc;margin-bottom:8px;font-size:11px;background:#111;padding:6px;border:1px solid #333;white-space:pre-wrap;">等待指令...</div>
@@ -157,11 +160,13 @@
 
                 // 针对读取列表时的 429 单独处理
                 if (res.status === 429) {
-                    log(`⚠️ 读取本地列表触发风控 (429)，等待 15 秒后重试...`, true);
-                    await new Promise(r => setTimeout(r, 15000));
+                    log(`⚠️ 读取本地列表触发风控 (429)，等待 5 秒后重试...`, true);
+                    await new Promise(r => setTimeout(r, 5000));
                     retryCount++;
-                    if (retryCount > 5) throw new Error("读取本地列表重试次数过多，终止操作");
-                    // 429 后重试当前 cursor，不 break，continue 继续循环
+                    if (retryCount >= 3) {
+                        log("⚠️ 重试次数过多，跳过读取。开始获取云端列表数据。", true);
+                        break;
+                    }
                     continue; 
                 }
                 
@@ -184,8 +189,8 @@
                 // 稍微延时防止请求过快
                 await new Promise(r => setTimeout(r, 200));
             } catch(e) {
-                // 如果是上面 throw 的 retry error 或者其他网络错误，则抛出让主流程捕获，避免返回空列表导致灾难性全量重试
-                throw e;
+                log(`⚠️ 读取中断: ${e.message}，将跳过剩余本地检查`, true);
+                break;
             }
         }
         return set;
@@ -320,17 +325,30 @@
         if(!html) return new Set();
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, "text/html");
-        // 排除 404 页
-        if(doc.title && doc.title.toLowerCase().includes("not found")) return new Set();
         
-        const links = doc.querySelectorAll('a[href*="x.com/"]');
+        // 排除错误页面
+        if(doc.title && /not found|error|404|just a moment/i.test(doc.title)) return new Set();
+
+        const links = doc.querySelectorAll('a');
         const set = new Set();
+        
+        // 排除列表
+        const reserved = ["home", "explore", "notifications", "messages", "i", "user", "search", "settings", "login", "logout", "intent", "share", "hashtag"];
+
         links.forEach(l => {
             const h = l.getAttribute('href');
-            const t = l.innerText.trim();
-            if(t.startsWith('@') && h) {
-                const m = h.match(/x\.com\/([a-zA-Z0-9_]+)/);
-                if(m) set.add(m[1]);
+            if(!h) return;
+
+            // 匹配 twitter.com 或 x.com，提取用户名
+            // 忽略 queries, hashtags, status 等
+            const match = h.match(/^(?:https?:\/\/)?(?:www\.)?(?:twitter|x)\.com\/([a-zA-Z0-9_]+)(?:\/|$|\?)/i);
+            
+            if(match && match[1]) {
+                const name = match[1].toLowerCase();
+                // 排除系统路径 和 具体推文链接(/status/)
+                if(!reserved.includes(name) && !h.includes("/status/") && !h.includes("/hashtag/")) {
+                    set.add(name);
+                }
             }
         });
         return set;
@@ -339,10 +357,33 @@
     function fetchExternal(url) {
         return new Promise(resolve => {
             GM_xmlhttpRequest({
-                method: "GET", url: url, timeout: 8000,
-                onload: r => resolve(r.status===200 ? r.responseText : null),
-                onerror: () => resolve(null),
-                ontimeout: () => resolve(null)
+                method: "GET", 
+                url: url, 
+                timeout: 10000,
+                headers: {
+                    // 伪装成浏览器，防止被拦截
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Referer": "https://basedinchina.com/"
+                },
+                onload: r => {
+                    if (r.status === 200) {
+                        // 成功拿到数据
+                        resolve(r.responseText);
+                    } else {
+                        // 打印具体的失败原因
+                        log(`❌ 无法访问 ${url}: HTTP ${r.status}`, true);
+                        resolve(null);
+                    }
+                },
+                onerror: (e) => {
+                    log(`❌ 网络错误 ${url}: ${e.error}`, true);
+                    resolve(null);
+                },
+                ontimeout: () => {
+                    log(`❌ 请求超时 ${url}`, true);
+                    resolve(null);
+                }
             });
         });
     }
