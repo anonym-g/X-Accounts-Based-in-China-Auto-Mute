@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.1.0
 // @description  爬取 + 过滤已屏蔽 + 串行执行 (显示错误码)
 // @author       OpenSource
 // @match        https://x.com/*
@@ -17,16 +17,16 @@
     'use strict';
 
     // --- 配置参数 ---
-    const BASE_URL = "https://basedinchina.com/home";
+    const BASE_URL = "https://basedinchina.com/api/users";
     
     // 爬虫并发数
-    const CRAWL_CONCURRENCY = 20; 
+    const CRAWL_CONCURRENCY = 20;
 
     // Mute 设置
     // 最小间隔 (毫秒)
     const MIN_DELAY = 100;
     // 最大间隔 (毫秒)
-    const MAX_DELAY = 500;
+    const MAX_DELAY = 1000;
 
     // --- UI 界面 ---
     function createUI() {
@@ -167,7 +167,7 @@
                         log("⚠️ 重试次数过多，跳过读取。开始获取云端列表数据。", true);
                         break;
                     }
-                    continue; 
+                    continue;
                 }
                 
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -200,51 +200,59 @@
     async function crawlAllPages() {
         const all = new Set();
         let page = 1;
-        let isRunning = true;
-        let emptyRound = 0;
+        // 利用 API 的 pageSize 参数，设为 50 (最大值) 以提高效率
+        const pageSize = 50;
+        let totalPages = 9999; // 初始假定值，第一次请求后更新
 
-        while(isRunning) {
+        while(page <= totalPages) {
             const tasks = [];
-            const nums = [];
             
             // 构造并发任务
             for(let i=0; i<CRAWL_CONCURRENCY; i++) {
                 const p = page + i;
-                nums.push(p);
-                const url = p===1 ? `${BASE_URL}/` : `${BASE_URL}/?page=${p}`;
+                if (p > totalPages) break;
+
+                // 构造 API URL
+                const url = `${BASE_URL}?page=${p}&pageSize=${pageSize}`;
                 tasks.push(fetchExternal(url));
             }
 
-            // 打印当前正在下载哪些页
-            log(`📥 下载页面: ${nums[0]} - ${nums[nums.length-1]} ...`);
+            if (tasks.length === 0) break;
+
+            // 打印日志
+            log(`📥 请求 API 页面: ${page} - ${page + tasks.length - 1} ...`);
 
             const results = await Promise.all(tasks);
             
-            let addedCount = 0;
-            results.forEach(html => {
-                if(!html) return;
-                const users = parseUsers(html);
-                users.forEach(u => {
-                    if(!all.has(u)) {
-                        all.add(u);
-                        addedCount++;
+            results.forEach(jsonStr => {
+                if(!jsonStr) return;
+                try {
+                    const data = JSON.parse(jsonStr);
+                    
+                    // 第一次请求时，更新总页数
+                    if (data.pageCount) {
+                        totalPages = data.pageCount;
                     }
-                });
-            });
 
-            if(addedCount === 0) {
-                emptyRound++;
-                // 连续2轮（40页）没新数据则停
-                if(emptyRound >= 2) isRunning = false;
-            } else {
-                emptyRound = 0;
-            }
+                    // 提取 userName (对应推特 ID)
+                    if (Array.isArray(data.users)) {
+                        data.users.forEach(user => {
+                            if(user.userName) {
+                                all.add(user.userName.toLowerCase());
+                            }
+                        });
+                    }
+                } catch(e) {
+                    console.error("JSON 解析失败", e);
+                }
+            });
             
-            updateProgress(0, `已发现: ${all.size}`);
+            updateProgress(0, `已发现: ${all.size} (页数: ${Math.min(page + CRAWL_CONCURRENCY - 1, totalPages)}/${totalPages})`);
+            
             page += CRAWL_CONCURRENCY;
             
-            // 爬虫加个小延时
-            await new Promise(r => setTimeout(r, 500));
+            // 小延时防止请求过快
+            await new Promise(r => setTimeout(r, 300));
         }
         return all;
     }
@@ -319,39 +327,6 @@
     function getCsrfToken() {
         const match = document.cookie.match(/(^|;\s*)ct0=([^;]*)/);
         return match ? match[2] : null;
-    }
-
-    function parseUsers(html) {
-        if(!html) return new Set();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-        
-        // 排除错误页面
-        if(doc.title && /not found|error|404|just a moment/i.test(doc.title)) return new Set();
-
-        const links = doc.querySelectorAll('a');
-        const set = new Set();
-        
-        // 排除列表
-        const reserved = ["home", "explore", "notifications", "messages", "i", "user", "search", "settings", "login", "logout", "intent", "share", "hashtag"];
-
-        links.forEach(l => {
-            const h = l.getAttribute('href');
-            if(!h) return;
-
-            // 匹配 twitter.com 或 x.com，提取用户名
-            // 忽略 queries, hashtags, status 等
-            const match = h.match(/^(?:https?:\/\/)?(?:www\.)?(?:twitter|x)\.com\/([a-zA-Z0-9_]+)(?:\/|$|\?)/i);
-            
-            if(match && match[1]) {
-                const name = match[1].toLowerCase();
-                // 排除系统路径 和 具体推文链接(/status/)
-                if(!reserved.includes(name) && !h.includes("/status/") && !h.includes("/hashtag/")) {
-                    set.add(name);
-                }
-            }
-        });
-        return set;
     }
 
     function fetchExternal(url) {
