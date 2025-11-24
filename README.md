@@ -1,5 +1,5 @@
 # X-Accounts-Based-in-China-Auto-Mute
-Auto Mute X Accounts Based in China. Using [basedinchina.com](https://basedinchina.com)
+Auto Mute X Accounts Based in China. Using [basedinchina.com](https://basedinchina.com/home)
 
 By [@trailblaziger](https://x.com/trailblaziger)
 
