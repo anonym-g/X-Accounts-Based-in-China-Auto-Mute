@@ -13,7 +13,7 @@ By [@trailblaziger](https://x.com/trailblaziger)
 ![安装油猴](https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute/raw/main/pictures/install-tampermonkey.png)
 
 ### 2. 开启开发者模式
-进入 Chrome 的扩展程序管理页面 (`chrome://extensions/`)，在右上角打开“开发者模式” (Developer mode)。
+进入 Chrome 的扩展程序管理页面 (`chrome://extensions/`)，在右上角打开“开发者模式” (Developer mode)。然后进入 Tampermonkey 插件“详情”页，开启“允许运行用户脚本”。
 
 *注：部分环境下，如果不开启此模式，脚本可能无法正常注入或运行。*
 
