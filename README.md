@@ -1,6 +1,8 @@
 # X-Accounts-Based-in-China-Auto-Mute
 Auto Mute X Accounts Based in China. Using [basedinchina.com](https://basedinchina.com/home)
 
+GitHub Repository: [X-Accounts-Based-in-China-Auto-Mute](https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute)
+
 By [@trailblaziger](https://x.com/trailblaziger)
 
 ## Usage

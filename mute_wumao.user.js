@@ -1,26 +1,28 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
-// @namespace    http://tampermonkey.net/
-// @version      1.1.0
-// @description  爬取 + 过滤已屏蔽 + 串行执行 (显示错误码)
+// @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
+// @version      1.1.1
+// @description  获取五毛名单 + 过滤已屏蔽 + 串行拉黑 (显示错误码)
 // @author       OpenSource
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @connect      basedinchina.com
+// @connect      archive.org
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
+// @grant        GM_info
 // @license      MIT
 // @run-at       document-idle
+// @homepageURL  https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
+// @supportURL   https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute/issues
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // --- 配置参数 ---
-    const BASE_URL = "https://basedinchina.com/api/users";
-    
-    // 爬虫并发数
-    const CRAWL_CONCURRENCY = 20;
+    // API 端点，会自动 302 到 archive.org
+    const FULL_LIST_URL = "https://basedinchina.com/api/users/all";
 
     // Mute 设置
     // 最小间隔 (毫秒)
@@ -53,7 +55,7 @@
                 <div id="gw-bar" style="width:0%;background:#e0245e;height:100%;transition:width 0.2s"></div>
             </div>
             <div style="display:flex;gap:5px">
-                <button id="gw-btn" style="flex:1;background:#e0245e;color:white;border:none;padding:8px;cursor:pointer;font-weight:bold;border-radius:4px;">🚀 启动稳定处理</button>
+                <button id="gw-btn" style="flex:1;background:#e0245e;color:white;border:none;padding:8px;cursor:pointer;font-weight:bold;border-radius:4px;">🚀 启动全量处理</button>
             </div>
         `;
         document.body.appendChild(panel);
@@ -95,10 +97,15 @@
             const localMuted = await fetchLocalMutes(csrf);
             log(`✅ 本地名单读取完毕: 共 ${localMuted.size} 人`);
 
-            // 2. 爬取远程列表
-            log(`🕸️ 正在爬取 BasedInChina (并发: ${CRAWL_CONCURRENCY})...`);
-            const remoteUsers = await crawlAllPages();
-            log(`✅ 远程爬取完毕: 共 ${remoteUsers.size} 人`);
+            // 2. 获取远程全量列表
+            log(`🕸️ 正在下载 BasedInChina 全量名单...`);
+            log(`ℹ️ 数据较大，正在从 Archive 载入，请稍候...`);
+            const remoteUsers = await fetchRemoteList();
+            
+            if (remoteUsers.size === 0) {
+                throw new Error("未获取到任何远程数据，请检查网络或 API");
+            }
+            log(`✅ 远程名单下载完毕: 共 ${remoteUsers.size} 人`);
 
             // 3. 过滤
             log("⚙️ 正在比对数据...");
@@ -106,6 +113,7 @@
             let skipped = 0;
             
             remoteUsers.forEach(u => {
+                // 转换为小写进行比对
                 if(localMuted.has(u.toLowerCase())) {
                     skipped++;
                 } else {
@@ -119,6 +127,7 @@
             if (todoList.length === 0) {
                 log("🎉 你的屏蔽列表已是最新，无需操作！");
                 alert("所有目标均已在你的屏蔽列表中。");
+                updateProgress(100, "无需操作");
                 btn.disabled = false;
                 return;
             }
@@ -146,11 +155,11 @@
     async function fetchLocalMutes(csrf) {
         const set = new Set();
         let cursor = -1;
-        let retryCount = 0;
         
         while(true) {
             try {
-                const url = `https://x.com/i/api/1.1/mutes/users/list.json?include_entities=false&skip_status=true&cursor=${cursor}`;
+                // count=100 (API允许的最大值)，大幅减少请求次数
+                const url = `https://x.com/i/api/1.1/mutes/users/list.json?include_entities=false&skip_status=true&count=100&cursor=${cursor}`;
                 const res = await fetch(url, {
                     headers: {
                         'authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
@@ -158,102 +167,60 @@
                     }
                 });
 
-                // 针对读取列表时的 429 单独处理
+                // 遇到 429, Break
                 if (res.status === 429) {
-                    log(`⚠️ 读取本地列表触发风控 (429)，等待 5 秒后重试...`, true);
-                    await new Promise(r => setTimeout(r, 5000));
-                    retryCount++;
-                    if (retryCount >= 3) {
-                        log("⚠️ 重试次数过多，跳过读取。开始获取云端列表数据。", true);
-                        break;
-                    }
-                    continue;
+                    log(`⚠️ 本地列表读取触及 API 上限 (429)，停止读取。当前已获: ${set.size} (将基于此列表继续)`, true);
+                    break;
                 }
                 
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 
-                // 请求成功，重置重试计数
-                retryCount = 0;
-
                 const json = await res.json();
-                json.users.forEach(u => set.add(u.screen_name.toLowerCase()));
+                
+                if (json.users && Array.isArray(json.users)) {
+                    json.users.forEach(u => set.add(u.screen_name.toLowerCase()));
+                }
                 
                 cursor = json.next_cursor_str;
                 
                 // 更新 UI
-                updateProgress(0, `已读取: ${set.size}`);
+                updateProgress(0, `⚡本地读取: ${set.size}`);
                 
                 // cursor 为 0 代表结束
                 if(cursor === "0" || cursor === 0) break;
-                
-                // 稍微延时防止请求过快
-                await new Promise(r => setTimeout(r, 200));
             } catch(e) {
-                log(`⚠️ 读取中断: ${e.message}，将跳过剩余本地检查`, true);
+                log(`⚠️ 读取本地列表部分中断: ${e.message}，将跳过剩余检查`, true);
                 break;
             }
         }
         return set;
     }
 
-    // 爬取 basedinchina
-    async function crawlAllPages() {
+    // 获取全量名单 (单一请求，自动处理 302)
+    async function fetchRemoteList() {
         const all = new Set();
-        let page = 1;
-        // 利用 API 的 pageSize 参数，设为 50 (最大值) 以提高效率
-        const pageSize = 50;
-        let totalPages = 9999; // 初始假定值，第一次请求后更新
+        
+        const jsonStr = await fetchExternal(FULL_LIST_URL);
+        
+        if (!jsonStr) return all;
 
-        while(page <= totalPages) {
-            const tasks = [];
+        try {
+            const data = JSON.parse(jsonStr);
             
-            // 构造并发任务
-            for(let i=0; i<CRAWL_CONCURRENCY; i++) {
-                const p = page + i;
-                if (p > totalPages) break;
-
-                // 构造 API URL
-                const url = `${BASE_URL}?page=${p}&pageSize=${pageSize}`;
-                tasks.push(fetchExternal(url));
+            if (data.users && Array.isArray(data.users)) {
+                data.users.forEach(user => {
+                    if (user.userName) {
+                        all.add(user.userName);
+                    }
+                });
+            } else {
+                log("⚠️ 远程数据格式或有误，未找到 users 数组", true);
+                console.log("Received Data:", data);
             }
-
-            if (tasks.length === 0) break;
-
-            // 打印日志
-            log(`📥 请求 API 页面: ${page} - ${page + tasks.length - 1} ...`);
-
-            const results = await Promise.all(tasks);
-            
-            results.forEach(jsonStr => {
-                if(!jsonStr) return;
-                try {
-                    const data = JSON.parse(jsonStr);
-                    
-                    // 第一次请求时，更新总页数
-                    if (data.pageCount) {
-                        totalPages = data.pageCount;
-                    }
-
-                    // 提取 userName (对应推特 ID)
-                    if (Array.isArray(data.users)) {
-                        data.users.forEach(user => {
-                            if(user.userName) {
-                                all.add(user.userName.toLowerCase());
-                            }
-                        });
-                    }
-                } catch(e) {
-                    console.error("JSON 解析失败", e);
-                }
-            });
-            
-            updateProgress(0, `已发现: ${all.size} (页数: ${Math.min(page + CRAWL_CONCURRENCY - 1, totalPages)}/${totalPages})`);
-            
-            page += CRAWL_CONCURRENCY;
-            
-            // 小延时防止请求过快
-            await new Promise(r => setTimeout(r, 300));
+        } catch (e) {
+            log(`❌ JSON 解析失败: ${e.message}`, true);
         }
+
         return all;
     }
 
@@ -284,15 +251,14 @@
 
                 if(res.ok) {
                     success++;
-                    // 每10个打印一条日志，避免刷屏
-                    if(success % 10 === 0) log(`已处理: ${i+1}/${list.length} | 成功: ${success} | 失败: ${fail}`);
+                    if(success % 10 === 0) log(`处理进度: ${i+1}/${list.length} | 成功: ${success} | 失败: ${fail}`);
                 } else {
                     fail++;
                     log(`❌ 失败 @${user}: HTTP ${res.status}`, true);
                     
-                    // 如果遇到 429 (Too Many Requests)，必须暂停
+                    // 如果遇到 429 (Too Many Requests)，短暂暂停
                     if(res.status === 429) {
-                        log("⛔ 触发风控 (429)，脚本强制暂停 5 秒...", true);
+                        log("⛔ 触发风控 (429)，暂停 5 秒...", true);
                         await new Promise(r => setTimeout(r, 5000));
                     }
                 }
@@ -334,11 +300,11 @@
             GM_xmlhttpRequest({
                 method: "GET", 
                 url: url, 
-                timeout: 10000,
+                timeout: 30000, // 下载大文件需要更长时间
                 headers: {
                     // 伪装成浏览器，防止被拦截
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept": "application/json, text/plain, */*",
                     "Referer": "https://basedinchina.com/"
                 },
                 onload: r => {
@@ -346,17 +312,17 @@
                         // 成功拿到数据
                         resolve(r.responseText);
                     } else {
-                        // 打印具体的失败原因
-                        log(`❌ 无法访问 ${url}: HTTP ${r.status}`, true);
+                        log(`❌ 无法访问 ${url}: HTTP ${r.status} ${r.statusText}`, true);
+                        // 如果是 302 但 GM 没自动跳转（罕见配置），可能需要检查 r.responseHeaders
                         resolve(null);
                     }
                 },
                 onerror: (e) => {
-                    log(`❌ 网络错误 ${url}: ${e.error}`, true);
+                    log(`❌ 网络错误: ${e.error}`, true);
                     resolve(null);
                 },
                 ontimeout: () => {
-                    log(`❌ 请求超时 ${url}`, true);
+                    log(`❌ 请求超时`, true);
                     resolve(null);
                 }
             });
