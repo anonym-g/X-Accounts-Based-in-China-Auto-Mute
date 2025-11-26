@@ -1,5 +1,5 @@
 # X-Accounts-Based-in-China-Auto-Mute
-Auto Mute X Accounts Based in China. 
+Auto-Mute CCP troll X (Twitter) accounts.
 
 Database Used: 
 - [basedinchina.com](https://basedinchina.com/home)
