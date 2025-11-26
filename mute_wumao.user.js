@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.0
+// @version      1.2.1
 // @description  获取五毛名单 + 过滤已屏蔽 + 串行拉黑 (显示错误码)
 // @author       OpenSource
 // @match        https://x.com/*
@@ -41,8 +41,6 @@
         CACHE: {
             LOCAL_MUTES: "gw_local_mutes_list",      // 完整列表
             LOCAL_MUTES_HEAD: "gw_local_mutes_head", // 头部指纹
-            REMOTE_LIST: "gw_remote_list",
-            REMOTE_COUNT: "gw_remote_count"          // 存储云端列表的总人数，作为标识符
         },
         // Mute 设置 (毫秒)
         DELAY: {
@@ -156,8 +154,6 @@
             UIManager.log("🧹 正在清除所有本地缓存...");
             await GM.deleteValue(CONSTANTS.CACHE.LOCAL_MUTES);
             await GM.deleteValue(CONSTANTS.CACHE.LOCAL_MUTES_HEAD);
-            await GM.deleteValue(CONSTANTS.CACHE.REMOTE_LIST);
-            await GM.deleteValue(CONSTANTS.CACHE.REMOTE_COUNT);
             UIManager.log("✅ 缓存已清除！页面将在 2 秒后刷新。");
             setTimeout(() => window.location.reload(), 2000);
         }
@@ -278,7 +274,7 @@
 
         // 获取全量名单
         async fetchAll() {
-            UIManager.log("🕸️ 正在从 2 个数据源获取远程名单...");
+            UIManager.log("🕸️ 正在从 2 个数据源获取五毛名单...");
             const all = new Set();
             
             const [source1Data, source2Data] = await Promise.all([
@@ -362,29 +358,16 @@
             UIManager.log(`💾 已更新缓存 (${set.size} 人)`);
         },
 
-        // 获取并缓存远程列表
-        async getRemoteUsers() {
+        // 获取五毛列表
+        async getWumaoUsers() {
+            // 下载
             const all = await RemoteSource.fetchAll();
-            const newCount = all.size;
-            const cachedCount = await GM.getValue(CONSTANTS.CACHE.REMOTE_COUNT, 0);
-
-            if (newCount > 0 && newCount === cachedCount) {
-                const cachedList = await GM.getValue(CONSTANTS.CACHE.REMOTE_LIST, null);
-                if (cachedList) {
-                    UIManager.log(`📦 云端数据无变化 (共 ${newCount} 人)，从缓存加载。`);
-                    return new Set(cachedList);
-                }
-            }
             
-            if (newCount > 0) {
-                UIManager.log(`💾 云端数据已更新: ${cachedCount} -> ${newCount}。正在缓存...`);
-                await GM.setValue(CONSTANTS.CACHE.REMOTE_LIST, Array.from(all));
-                await GM.setValue(CONSTANTS.CACHE.REMOTE_COUNT, newCount);
+            // 校验
+            if (all.size > 0) {
                 return all;
             } else {
-                UIManager.log(`⚠️ 未能从网络获取任何用户，将使用旧缓存`, true);
-                const cachedList = await GM.getValue(CONSTANTS.CACHE.REMOTE_LIST, []);
-                return new Set(cachedList);
+                throw new Error("未能从网络获取任何用户，请检查网络连接或源站状态。");
             }
         },
 
@@ -455,20 +438,20 @@
                 const localMuted = await App.fetchLocalMutes(csrf);
                 UIManager.log(`✅ 本地名单读取完毕: 共 ${localMuted.size} 人`);
 
-                // 2. 获取远程全量列表
-                const remoteUsers = await App.getRemoteUsers();
+                // 2. 获取五毛列表
+                const wumaoUsers = await App.getWumaoUsers();
                 
-                if (remoteUsers.size === 0) {
-                    throw new Error("未获取到任何远程数据，请检查网络或 API");
+                if (wumaoUsers.size === 0) {
+                    throw new Error("未获取任何数据，请检查网络或 API");
                 }
-                UIManager.log(`✅ 远程名单下载完毕: 共 ${remoteUsers.size} 人`);
+                UIManager.log(`✅ 五毛名单下载完毕: 共 ${wumaoUsers.size} 人`);
 
                 // 3. 过滤
                 UIManager.log("⚙️ 正在比对数据...");
                 const todoList = [];
                 let skipped = 0;
                 
-                remoteUsers.forEach(u => {
+                wumaoUsers.forEach(u => {
                     // 转换为小写进行比对
                     if(localMuted.has(u.toLowerCase())) {
                         skipped++;
