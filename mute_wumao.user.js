@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.1
+// @version      1.2.2
 // @description  获取五毛名单 + 过滤已屏蔽 + 串行拉黑 (显示错误码)
 // @author       OpenSource
 // @match        https://x.com/*
@@ -41,6 +41,9 @@
         CACHE: {
             LOCAL_MUTES: "gw_local_mutes_list",      // 完整列表
             LOCAL_MUTES_HEAD: "gw_local_mutes_head", // 头部指纹
+            TEMP_CURSOR: "gw_temp_cursor",           // 断点游标
+            TEMP_LIST: "gw_temp_list",               // 断点临时名单
+            TEMP_TIME: "gw_temp_time"                // 断点时间戳
         },
         // Mute 设置 (毫秒)
         DELAY: {
@@ -53,7 +56,8 @@
             BAR_ID: "gw-bar",
             TXT_ID: "gw-pct-txt",
             BTN_START_ID: "gw-btn",
-            BTN_CLEAR_ID: "gw-btn-clear"
+            BTN_CLEAR_ID: "gw-btn-clear",
+            INITIAL_LOG_HTML: `等待指令...\n--------------------\n<a href="https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute" target="_blank" style="color:#6abbff;text-decoration:none;">🔗 GitHub Repo</a>\nBy <a href="https://x.com/trailblaziger" target="_blank" style="color:#6abbff;text-decoration:none;">@trailblaziger</a>`
         }
     };
 
@@ -93,27 +97,35 @@
             panel.id = CONSTANTS.UI.PANEL_ID;
             
             Object.assign(panel.style, {
-                position: "fixed", bottom: "20px", left: "20px", zIndex: "99999",
+                position: "fixed",
+                bottom: "5px",
+                left: "0px",
+                margin: "0px",
+                zIndex: "99999",
                 background: "rgba(0, 0, 0, 0.95)", color: "#fff", padding: "15px", borderRadius: "8px",
-                width: "350px", fontSize: "12px", border: "1px solid #444", fontFamily: "monospace",
+                width: "184px",
+                fontSize: "12px", border: "1px solid #444", fontFamily: "monospace",
                 boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
             });
 
             // 动态获取脚本头部的版本号
             const version = GM_info.script.version;
+
+            // 链接样式
+            const linkStyle = "color:#6abbff;text-decoration:none;margin-bottom:2px;";
             
             panel.innerHTML = `
                 <div style="border-bottom:1px solid #444;margin-bottom:8px;padding-bottom:5px;display:flex;justify-content:space-between;align-items:center">
                     <span style="font-weight:bold;color:#e0245e;">GlassWall v${version}</span>
                     <span id="${CONSTANTS.UI.TXT_ID}" style="color:#aaa">Ready</span>
                 </div>
-                <div id="${CONSTANTS.UI.LOG_ID}" style="height:160px;overflow-y:auto;color:#ccc;margin-bottom:8px;font-size:11px;background:#111;padding:6px;border:1px solid #333;white-space:pre-wrap;">等待指令...</div>
+                <div id="${CONSTANTS.UI.LOG_ID}" style="height:400px;overflow-y:auto;color:#ccc;margin-bottom:8px;font-size:11px;background:#111;padding:6px;border:1px solid #333;white-space:pre-wrap;">${CONSTANTS.UI.INITIAL_LOG_HTML}</div>
                 <div style="background:#333;height:6px;margin-bottom:8px;border-radius:3px;overflow:hidden">
                     <div id="${CONSTANTS.UI.BAR_ID}" style="width:0%;background:#e0245e;height:100%;transition:width 0.2s"></div>
                 </div>
                 <div style="display:flex;gap:5px">
-                    <button id="${CONSTANTS.UI.BTN_START_ID}" style="flex:1;background:#e0245e;color:white;border:none;padding:8px;cursor:pointer;font-weight:bold;border-radius:4px;">🚀 启动全量处理</button>
-                    <button id="${CONSTANTS.UI.BTN_CLEAR_ID}" style="flex:0.6;background:#555;color:white;border:none;padding:8px;cursor:pointer;border-radius:4px;">🧹 清除缓存</button>
+                    <button id="${CONSTANTS.UI.BTN_START_ID}" style="flex:1;display:flex;justify-content:center;align-items:center;background:#e0245e;color:white;border:none;padding:8px;cursor:pointer;font-weight:bold;border-radius:4px;">开始处理</button>
+                    <button id="${CONSTANTS.UI.BTN_CLEAR_ID}" style="flex:0.6;display:flex;justify-content:center;align-items:center;background:#555;color:white;border:none;padding:8px;cursor:pointer;border-radius:4px;">清除缓存</button>
                 </div>
             `;
             document.body.appendChild(panel);
@@ -154,6 +166,9 @@
             UIManager.log("🧹 正在清除所有本地缓存...");
             await GM.deleteValue(CONSTANTS.CACHE.LOCAL_MUTES);
             await GM.deleteValue(CONSTANTS.CACHE.LOCAL_MUTES_HEAD);
+            await GM.deleteValue(CONSTANTS.CACHE.TEMP_CURSOR);
+            await GM.deleteValue(CONSTANTS.CACHE.TEMP_LIST);
+            await GM.deleteValue(CONSTANTS.CACHE.TEMP_TIME);
             UIManager.log("✅ 缓存已清除！页面将在 2 秒后刷新。");
             setTimeout(() => window.location.reload(), 2000);
         }
@@ -178,45 +193,95 @@
             }
         },
 
-        // 全量拉取本地屏蔽列表 (支持分页)
+        // 全量拉取本地屏蔽列表 (断点续传)
         async fetchFullMuteList(csrf, initialPageData) {
             const set = new Set();
+            
+            // 1. 读取断点数据
+            const savedCursor = await GM.getValue(CONSTANTS.CACHE.TEMP_CURSOR, null);
+            const savedList = await GM.getValue(CONSTANTS.CACHE.TEMP_LIST, []);
+            const savedTime = await GM.getValue(CONSTANTS.CACHE.TEMP_TIME, 0);
+            
             let cursor = -1;
             let isFirstPage = true;
+
+            // 2. 校验断点是否有效 (24小时 = 86400000 毫秒)
+            const isResumeValid = (Date.now() - savedTime) < 86400000;
+
+            if (savedCursor && savedCursor !== "0" && savedCursor !== 0 && savedList.length > 0) {
+                if (isResumeValid) {
+                    // 有效断点：恢复
+                    UIManager.log(`📂 检测到上次中断的进度 (${new Date(savedTime).toLocaleString()})`);
+                    UIManager.log(`⏩ 恢复模式: 跳过前 ${savedList.length} 人，继续拉取...`);
+                    cursor = savedCursor;
+                    savedList.forEach(u => set.add(u));
+                    isFirstPage = false;
+                } else {
+                    // 过期断点：丢弃
+                    UIManager.log(`🗑️ 缓存已过期 (>24h)，将重新拉取。`);
+                    await GM.deleteValue(CONSTANTS.CACHE.TEMP_CURSOR);
+                    await GM.deleteValue(CONSTANTS.CACHE.TEMP_LIST);
+                    await GM.deleteValue(CONSTANTS.CACHE.TEMP_TIME);
+                }
+            }
 
             while (true) {
                 try {
                     let json;
-                    // 如果有第一页的预加载数据，直接使用
-                    if (isFirstPage && initialPageData) {
-                        const url = `${CONSTANTS.TWITTER.API_MUTE_LIST}?include_entities=false&skip_status=true&count=100&cursor=${cursor}`;
-                        const res = await fetch(url, { headers: TwitterClient.getHeaders(csrf) });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                        json = await res.json();
-                        
-                        // 额外添加 initialPageData (来自头部校验的数据)
-                        initialPageData.users.forEach(u => set.add(u.screen_name.toLowerCase()));
+                    
+                    if (isFirstPage && initialPageData && cursor === -1) {
+                        // 使用传入的头部数据，节省一次 API 额度
+                        json = {
+                            users: initialPageData.users,
+                            next_cursor_str: initialPageData.next_cursor_str
+                        };
                         isFirstPage = false;
+                        UIManager.log(`⚡ 使用预加载数据 (Page 1)`);
                     } else {
                         const url = `${CONSTANTS.TWITTER.API_MUTE_LIST}?include_entities=false&skip_status=true&count=100&cursor=${cursor}`;
                         const res = await fetch(url, { headers: TwitterClient.getHeaders(csrf) });
+                        
+                        // --- 处理速率限制 ---
                         if (res.status === 429) { 
-                            UIManager.log(`⚠️ API 速率限制 (429)，读取中断。`, true); 
-                            break; 
+                            const count = set.size;
+                            UIManager.log(`⛔ 触发 API 速率限制 (429)！`, true);
+                            UIManager.log(`💾 进度已自动保存 (已获取 ${count} 人)。`, true);
+                            UIManager.log(`⏳ 请等待 15 分钟后刷新页面重新运行，将自动继续。`, true);
+                            throw new Error("RATE_LIMIT_EXIT");
                         }
+                        
                         if (!res.ok) throw new Error(`HTTP ${res.status}`);
                         json = await res.json();
                     }
 
+                    // 处理数据
                     if (json.users && Array.isArray(json.users)) {
                         json.users.forEach(u => set.add(u.screen_name.toLowerCase()));
                     }
 
                     cursor = json.next_cursor_str;
-                    UIManager.updateProgress(0, `⚡全量拉取: ${set.size}`);
-                    if (cursor === "0" || cursor === 0) break;
+                    
+                    // --- 每页都保存断点 ---
+                    await GM.setValue(CONSTANTS.CACHE.TEMP_CURSOR, cursor);
+                    await GM.setValue(CONSTANTS.CACHE.TEMP_LIST, Array.from(set));
+                    await GM.setValue(CONSTANTS.CACHE.TEMP_TIME, Date.now());
+
+                    UIManager.updateProgress(0, `📥 同步中: ${set.size} 人`);
+
+                    // 结束条件
+                    if (cursor === "0" || cursor === 0) {
+                        // 拉取完成，删除临时断点
+                        await GM.deleteValue(CONSTANTS.CACHE.TEMP_CURSOR);
+                        await GM.deleteValue(CONSTANTS.CACHE.TEMP_LIST);
+                        await GM.deleteValue(CONSTANTS.CACHE.TEMP_TIME);
+                        break;
+                    }
+                    
+                    await Utils.sleep(200);
+
                 } catch (e) {
-                    UIManager.log(`⚠️ 全量拉取中断: ${e.message}。将基于当前已获取数据继续。`, true);
+                    if (e.message === "RATE_LIMIT_EXIT") throw e;
+                    UIManager.log(`⚠️ 拉取中断: ${e.message}`, true);
                     break;
                 }
             }
@@ -313,18 +378,21 @@
     const App = {
         // 获取推特已屏蔽列表 (流程：缓存校验 -> 使用缓存/全量拉取)
         async fetchLocalMutes(csrf) {
-            UIManager.log("🔎 正在校验本地已屏蔽列表的缓存...");
+            UIManager.log("🔎 正在校验已屏蔽列表缓存...");
 
             // 1. 获取最新屏蔽列表头部
             let liveHeadUsernames = [];
             try {
                 liveHeadUsernames = await TwitterClient.fetchMuteListHead(csrf);
             } catch (e) {
-                UIManager.log(`⚠️ 无法校验缓存: ${e.message}。将强制全量拉取。`, true);
-                // 全量拉取并保存
-                const fullSet = await TwitterClient.fetchFullMuteList(csrf, null);
-                await App.saveToCache(fullSet);
-                return fullSet;
+                if (e.message && e.message.includes("429")) {
+                    UIManager.log(`⛔ API 速率限制 (429)！`, true);
+                    UIManager.log(`⏳ 校验失败。请等待 15 分钟限制解除后刷新重试。`, true);
+                    throw new Error("RATE_LIMIT_EXIT");
+                } else {
+                    UIManager.log(`⚠️ 无法校验缓存: ${e.message}。`, true);
+                    throw new Error("UNKNOWN_ERROR");
+                }
             }
 
             // 2. 与缓存指纹比对
@@ -355,7 +423,7 @@
             const newHeadList = fullList.slice(0, 100);
             await GM.setValue(CONSTANTS.CACHE.LOCAL_MUTES, fullList);
             await GM.setValue(CONSTANTS.CACHE.LOCAL_MUTES_HEAD, JSON.stringify(newHeadList));
-            UIManager.log(`💾 已更新缓存 (${set.size} 人)`);
+            UIManager.log(`💾 ${set.size} 人`);
         },
 
         // 获取五毛列表
@@ -390,20 +458,20 @@
                         
                         const lowerUser = user.toLowerCase();
                         
-                        orderedCacheList.unshift(lowerUser); 
+                        orderedCacheList.unshift(lowerUser);
                         localMutedSet.add(lowerUser); // 同步更新 Set
 
                         await App.saveToCache(new Set(orderedCacheList));
 
-                        if(success % 10 === 0) UIManager.log(`处理进度: ${i+1}/${list.length} | 成功: ${success} | 失败: ${fail}`);
+                        if(success % 10 === 0) UIManager.log(`${i+1}/${list.length}\n成功: ${success} | 失败: ${fail}`);
                     } else {
                         fail++;
                         UIManager.log(`❌ 失败 @${user}: HTTP ${res.status}`, true);
                         
-                        // 如果遇到 429 (Too Many Requests)，短暂暂停
+                        // 如果遇到 429 (Too Many Requests)，暂停一段时间
                         if(res.status === 429) {
-                            UIManager.log("⛔ 触发风控 (429)，暂停 5 秒...", true);
-                            await Utils.sleep(5000);
+                            UIManager.log("⛔ 触发风控 (429)，暂停 3 分钟...", true);
+                            await Utils.sleep(180000);
                         }
                     }
 
