@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.3
+// @version      1.2.4
 // @description  Auto-Mute CCP troll X (Twitter) accounts. 自动屏蔽 X (Twitter) 五毛账号。
 // @author       OpenSource
 // @match        https://x.com/*
@@ -273,7 +273,7 @@
 
             let cursor = -1;
             let isFirstPage = true;
-            const isResumeValid = (Date.now() - savedTime) < 86400000; // 24h
+            const isResumeValid = (Date.now() - savedTime) < 864000000; // 240h
 
             if (savedCursor && savedCursor !== "0" && savedCursor !== 0 && savedList.length > 0) {
                 if (isResumeValid) {
@@ -283,7 +283,7 @@
                     savedList.forEach(u => set.add(u));
                     isFirstPage = false;
                 } else {
-                    this.logger.log(`🗑️ 缓存已过期 (>24h)，将重新拉取。`);
+                    this.logger.log(`🗑️ 缓存已过期 (>240h)，将重新拉取。`);
                     Storage.delete(keys.TEMP_CURSOR);
                     Storage.delete(keys.TEMP_LIST);
                     Storage.delete(keys.TEMP_TIME);
@@ -520,7 +520,10 @@
 
             // 2. 指纹校验 -> (断点续传 或 直接返回) 或 (重新缓存)
             const cachedHeadJson = Storage.get(Config.CACHE_KEYS.LOCAL_MUTES_HEAD, "[]");
-            const isCacheReliable = JSON.stringify(liveHeadUsernames) === cachedHeadJson;
+            const cachedHeadSet = new Set(JSON.parse(cachedHeadJson));
+            const liveHeadSet = new Set(liveHeadUsernames);
+
+            const isCacheReliable = cachedHeadSet.size === liveHeadSet.size && [...cachedHeadSet].every(user => liveHeadSet.has(user));
 
             // --- 分支 A: 缓存指纹可靠 ---
             if (isCacheReliable) {
@@ -545,10 +548,8 @@
             } 
             
             // --- 分支 B: 缓存指纹不可靠，说明缓存过期或无缓存 ---
-            else {
-                this.ui.log("⚠️ 缓存指纹不匹配。正在清除所有旧缓存并重新拉取...");
-                Storage.clearCache();
-            }
+            this.ui.log("⚠️ 缓存指纹不匹配或缓存已过期。正在清除所有旧缓存并重新拉取...");
+            Storage.clearCache();
 
             // 3. 执行全量拉取 (Fresh Start)
 
