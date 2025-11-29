@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.4
+// @version      1.2.5
 // @description  Auto-Mute CCP troll X (Twitter) accounts. 自动屏蔽 X (Twitter) 五毛账号。
 // @author       OpenSource
 // @match        https://x.com/*
@@ -504,6 +504,23 @@
 
         async _getLocalMutes(csrf) {
             this.ui.log("🔎 正在校验已屏蔽列表缓存...");
+
+            // 只要有断点，直接续传，无视指纹校验，防止被 clearCache 清除
+            const savedCursor = Storage.get(Config.CACHE_KEYS.TEMP_CURSOR);
+            const savedList = Storage.get(Config.CACHE_KEYS.TEMP_LIST, []);
+
+            // 只要 cursor 有效且有临时数据，就认为是中断任务
+            if (savedCursor && savedCursor !== "0" && savedCursor !== 0 && savedList.length > 0) {
+                this.ui.log("⚠️ 检测到中断任务。正在断点续传...");
+
+                // fetchFullMuteList 内部会断点续传
+                const fullSet = await this.api.fetchFullMuteList(csrf, null,
+                    (count) => this.ui.updateProgress(0, `📥 续传中: ${count} 人`)
+                );
+
+                await this.saveToCache(fullSet);
+                return fullSet;
+            }
 
             // 1. 获取最新屏蔽列表头部 (API)
             let liveHeadUsernames = [];
