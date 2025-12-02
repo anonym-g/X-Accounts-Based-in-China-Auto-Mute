@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.4
+// @version      1.2.5
 // @description  Auto-Mute CCP troll X (Twitter) accounts. 自动屏蔽 X (Twitter) 五毛账号。
 // @author       OpenSource
 // @match        https://x.com/*
@@ -316,6 +316,11 @@
                     // 处理数据
                     if (json.users && Array.isArray(json.users)) {
                         json.users.forEach(u => set.add(u.screen_name.toLowerCase()));
+
+                        if ((!savedCursor || savedCursor === "0") && set.size <= json.users.length) {
+                            const headUsers = json.users.map(u => u.screen_name.toLowerCase());
+                            Storage.set(Config.CACHE_KEYS.LOCAL_MUTES_HEAD, JSON.stringify(headUsers));
+                        }
                     }
 
                     cursor = json.next_cursor_str;
@@ -520,10 +525,32 @@
 
             // 2. 指纹校验 -> (断点续传 或 直接返回) 或 (重新缓存)
             const cachedHeadJson = Storage.get(Config.CACHE_KEYS.LOCAL_MUTES_HEAD, "[]");
-            const cachedHeadSet = new Set(JSON.parse(cachedHeadJson));
+            
+            // 使用模糊匹配，以容忍 API 波动或炸号导致的数量不一致
+            const cachedList = JSON.parse(cachedHeadJson); // 解析为数组以访问索引
+            const cachedHeadSet = new Set(cachedList);
             const liveHeadSet = new Set(liveHeadUsernames);
 
-            const isCacheReliable = cachedHeadSet.size === liveHeadSet.size && [...cachedHeadSet].every(user => liveHeadSet.has(user));
+            // A. 头部一致性
+            const firstLive = liveHeadUsernames[0];
+            const firstCache = cachedList[0];
+            const isTopMatch = (firstLive === firstCache) || (!firstLive && !firstCache);
+
+            // B. 集合重合度
+            let matchCount = 0;
+            liveHeadSet.forEach(u => { if (cachedHeadSet.has(u)) matchCount++; });
+            
+            const liveSize = liveHeadSet.size;
+            // 计算重合率 (如果 live 为空且 cache 为空视为 100%，否则计算比例)
+            const overlapRatio = liveSize > 0 ? (matchCount / liveSize) : (cachedList.length === 0 ? 1 : 0);
+            
+            // 设定阈值
+            const isOverlapSafe = overlapRatio >= 0.95;
+
+            if (!isTopMatch) this.ui.log(`📝 列表头部变更: Live[${firstLive || 'null'}] vs Cache[${firstCache || 'null'}]`);
+            if (!isOverlapSafe && liveSize > 0) this.ui.log(`📉 列表差异过大: 重合度 ${(overlapRatio * 100).toFixed(1)}%`);
+
+            const isCacheReliable = isTopMatch && isOverlapSafe;
 
             // --- 分支 A: 缓存指纹可靠 ---
             if (isCacheReliable) {
@@ -537,7 +564,7 @@
                     );
                     await this.saveToCache(fullSet);
                     return fullSet;
-                } 
+                }
                 
                 // A2. 如果指纹匹配，且没有断点，说明本地缓存完整且有效
                 const cachedList = Storage.get(Config.CACHE_KEYS.LOCAL_MUTES, null);
@@ -545,7 +572,7 @@
                     this.ui.log(`✅ 缓存校验通过，从本地加载 ${cachedList.length} 人。`);
                     return new Set(cachedList);
                 }
-            } 
+            }
             
             // --- 分支 B: 缓存指纹不可靠，说明缓存过期或无缓存 ---
             this.ui.log("⚠️ 缓存指纹不匹配或缓存已过期。正在清除所有旧缓存并重新拉取...");
