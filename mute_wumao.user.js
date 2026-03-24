@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
 // @namespace    https://github.com/ReproduceCycle/X-Accounts-Based-in-China-Auto-Mute
-// @version      1.2.5
+// @version      1.2.6
 // @description  Auto-Mute CCP troll X (Twitter) accounts. 自动屏蔽 X (Twitter) 五毛账号。
 // @author       OpenSource
 // @match        https://x.com/*
