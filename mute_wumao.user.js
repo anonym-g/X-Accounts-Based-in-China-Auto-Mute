@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Twitter/X Glass Great Wall
-// @namespace    https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
+// @namespace    https://github.com/ReproduceCycle/X-Accounts-Based-in-China-Auto-Mute
 // @version      1.2.5
 // @description  Auto-Mute CCP troll X (Twitter) accounts. 自动屏蔽 X (Twitter) 五毛账号。
 // @author       OpenSource
@@ -17,8 +17,8 @@
 // @grant        GM_deleteValue
 // @license      MIT
 // @run-at       document-idle
-// @homepageURL  https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute
-// @supportURL   https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute/issues
+// @homepageURL  https://github.com/ReproduceCycle/X-Accounts-Based-in-China-Auto-Mute
+// @supportURL   https://github.com/ReproduceCycle/X-Accounts-Based-in-China-Auto-Mute/issues
 // ==/UserScript==
 
 (function() {
@@ -176,7 +176,7 @@
                 </div>
                 
                 <div id="${Config.UI.BODY_ID}" style="display:${displayStyle}">
-                    <div id="${Config.UI.LOG_ID}" style="height:400px;overflow-y:auto;color:#ccc;margin-bottom:8px;font-size:11px;background:#111;padding:6px;border:1px solid #333;white-space:pre-wrap;">等待指令...\n--------------------\n<a href="https://github.com/anonym-g/X-Accounts-Based-in-China-Auto-Mute" target="_blank" style="color:#6abbff;text-decoration:none;">🔗 GitHub Repo</a>\nBy <a href="https://x.com/trailblaziger" target="_blank" style="color:#6abbff;text-decoration:none;">@trailblaziger</a></div>
+                    <div id="${Config.UI.LOG_ID}" style="height:400px;overflow-y:auto;color:#ccc;margin-bottom:8px;font-size:11px;background:#111;padding:6px;border:1px solid #333;white-space:pre-wrap;">等待指令...\n--------------------\n<a href="https://github.com/ReproduceCycle/X-Accounts-Based-in-China-Auto-Mute" target="_blank" style="color:#6abbff;text-decoration:none;">🔗 GitHub Repo</a>\nBy <a href="https://x.com/ReproduceCycle" target="_blank" style="color:#6abbff;text-decoration:none;">@ReproduceCycle</a></div>
                     <div style="background:#333;height:6px;margin-bottom:8px;border-radius:3px;overflow:hidden">
                         <div id="${Config.UI.BAR_ID}" style="width:0%;background:#e0245e;height:100%;transition:width 0.2s"></div>
                     </div>
